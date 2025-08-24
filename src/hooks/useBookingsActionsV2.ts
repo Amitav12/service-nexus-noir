@@ -1,4 +1,3 @@
-
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
@@ -34,20 +33,18 @@ export const useBookingsActionsV2 = () => {
         throw new Error('Failed to fetch booking details');
       }
 
-      // FIX: use provider_user_id (schema) instead of provider_id
       if (booking.provider_user_id !== user.id) {
         throw new Error('You are not authorized to accept this booking');
       }
 
-      if (booking.status !== 'pending') {
-        throw new Error('This booking cannot be accepted');
+      if (booking.status !== 'confirmed') {
+        throw new Error('Only confirmed bookings can be accepted');
       }
 
       const { error } = await supabase
         .from('bookings')
         .update({ 
           status: 'accepted',
-          provider_notes: notes,
           accepted_at: new Date().toISOString()
         })
         .eq('id', bookingId);
@@ -98,7 +95,6 @@ export const useBookingsActionsV2 = () => {
         throw new Error('Failed to fetch booking details');
       }
 
-      // FIX: use provider_user_id instead of provider_id
       if (booking.provider_user_id !== user.id) {
         throw new Error('You are not authorized to update this booking');
       }
@@ -111,7 +107,6 @@ export const useBookingsActionsV2 = () => {
         .from('bookings')
         .update({ 
           status: 'in_progress',
-          provider_notes: notes,
           started_at: new Date().toISOString()
         })
         .eq('id', bookingId);
@@ -142,7 +137,7 @@ export const useBookingsActionsV2 = () => {
     }
   });
 
-  // Complete booking
+  // Complete booking - Service provider marks as completed
   const completeBooking = useMutation({
     mutationFn: async ({ bookingId, notes }: { bookingId: string; notes?: string }) => {
       console.log('🔄 Completing booking:', bookingId);
@@ -162,12 +157,11 @@ export const useBookingsActionsV2 = () => {
         throw new Error('Failed to fetch booking details');
       }
 
-      // FIX: use provider_user_id instead of provider_id
       if (booking.provider_user_id !== user.id) {
         throw new Error('You are not authorized to complete this booking');
       }
 
-      if (booking.status !== 'in_progress') {
+      if (!['accepted', 'in_progress'].includes(booking.status)) {
         throw new Error('This booking cannot be completed');
       }
 
@@ -175,7 +169,6 @@ export const useBookingsActionsV2 = () => {
         .from('bookings')
         .update({ 
           status: 'completed',
-          provider_notes: notes,
           completed_at: new Date().toISOString()
         })
         .eq('id', bookingId);
@@ -193,7 +186,7 @@ export const useBookingsActionsV2 = () => {
       queryClient.invalidateQueries({ queryKey: ['provider-bookings'] });
       toast({
         title: "Booking Completed",
-        description: "The booking has been marked as completed.",
+        description: "The booking has been marked as completed. Customer will be notified.",
       });
     },
     onError: (error) => {

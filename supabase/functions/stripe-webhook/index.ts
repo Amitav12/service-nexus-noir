@@ -1,34 +1,50 @@
 
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import Stripe from "https://esm.sh/stripe@14.21.0";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+
+// Remove static Redis import; we'll dynamic import when needed
+const STRIPE_WEBHOOK_SECRET = Deno.env.get("STRIPE_WEBHOOK_SECRET") || "";
+const REDIS_URL = Deno.env.get("REDIS_URL") || "";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, stripe-signature",
 };
 
-const logStep = (step: string, details?: any) => {
-  const timestamp = new Date().toISOString();
-  const detailsStr = details ? ` - ${JSON.stringify(details)}` : '';
-  console.log(`[${timestamp}] [STRIPE-WEBHOOK] ${step}${detailsStr}`);
+const log = (msg: string, ctx?: Record<string, unknown>) => {
+  console.log(`[stripe-webhook] ${msg}`, ctx ?? {});
 };
+
+function parseRedisUrl(url: string) {
+  try {
+    const u = new URL(url);
+    const isTls = u.protocol === "rediss:";
+    const hostname = u.hostname;
+    const port = Number(u.port || (isTls ? 6380 : 6379));
+    const password = u.password || undefined;
+    return { hostname, port, password, tls: isTls };
+  } catch {
+    return null;
+  }
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response("ok", { headers: corsHeaders });
   }
 
+  const signature = req.headers.get("stripe-signature") || "";
+
+
   try {
-    logStep("Webhook received");
+    const bodyText = await req.text();
+    const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") || "", { apiVersion: "2023-10-16" });
+    const event = stripe.webhooks.constructEvent(bodyText, signature, STRIPE_WEBHOOK_SECRET);
 
-    const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") || "", {
-      apiVersion: "2023-10-16",
-    });
-
-    // Get the raw body for signature verification
-    const body = await req.text();
-    const signature = req.headers.get("stripe-signature");
+    // Enqueue to Redis for async processing (if configured and available)
+    if (REDIS_URL) {
+      const cfg = parseRedisUrl(REDIS_URL);
+      if (cfg) {
 
     if (!signature) {
       throw new Error("No signature provided");
@@ -96,23 +112,25 @@ serve(async (req) => {
         logStep("Error recording payment", { error: paymentError });
         
         // Create automatic refund if payment recording fails
+
         try {
-          if (paymentIntentId) {
-            const refund = await stripe.refunds.create({
-              payment_intent: paymentIntentId,
-              reason: 'requested_by_customer',
-              metadata: {
-                reason: 'failed_to_record_payment',
-                original_session_id: session.id
-              }
-            });
-            logStep("Created automatic refund due to payment recording failure", { 
-              refundId: refund.id 
-            });
+          const mod = await import("https://deno.land/x/redis@v0.36.0/mod.ts");
+          const connect = (mod as any).connect as (opts: any) => Promise<any>;
+          const redis = await connect({
+            hostname: cfg.hostname,
+            port: cfg.port,
+            password: cfg.password,
+            tls: cfg.tls ? {} : undefined,
+          });
+          try {
+            await redis.lpush("queue:webhooks", JSON.stringify(event));
+          } finally {
+            try { redis?.close?.(); } catch {}
           }
-        } catch (refundError) {
-          logStep("Failed to create automatic refund", { error: refundError });
+        } catch (e) {
+          console.log("[stripe-webhook] Redis enqueue failed, continuing without queue", { error: e instanceof Error ? e.message : String(e) });
         }
+
         
         return new Response(JSON.stringify({ 
           error: "Failed to record payment",
@@ -164,6 +182,7 @@ serve(async (req) => {
 
       if (disputeError) {
         logStep("Error updating payment for dispute", { error: disputeError });
+
       }
     }
 
@@ -171,14 +190,11 @@ serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
       status: 200,
     });
-
-  } catch (error) {
-    logStep("Webhook error", { error: error instanceof Error ? error.message : String(error) });
-    return new Response(JSON.stringify({ 
-      error: error instanceof Error ? error.message : "Unknown error" 
-    }), {
+  } catch (err) {
+    log("Webhook signature validation failed", { error: err instanceof Error ? err.message : String(err) });
+    return new Response(JSON.stringify({ error: "Invalid signature" }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
-      status: 500,
+      status: 400,
     });
   }
 });

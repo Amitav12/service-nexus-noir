@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Calendar, Clock, User, Download, Star, CheckCircle, XCircle, AlertCircle, Edit, RotateCcw } from 'lucide-react';
+import { Calendar, Clock, User, Download, Star, CheckCircle, XCircle, AlertCircle, Edit, RotateCcw, Search, Filter } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { useBookingsActions } from '@/hooks/useBookingsActions';
@@ -42,6 +44,9 @@ const MyBookings = () => {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [showRatingForm, setShowRatingForm] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('date_desc');
 
   const loadBookings = async () => {
     if (!user?.id) return;
@@ -234,14 +239,44 @@ const MyBookings = () => {
     });
   };
 
+  // Filter and search bookings
+  const filteredBookings = bookings.filter(booking => {
+    const matchesSearch = searchTerm === '' || 
+      booking.booking_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      booking.services?.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      booking.provider_profiles?.business_name?.toLowerCase().includes(searchTerm.toLowerCase());
+
+    const matchesStatus = statusFilter === 'all' || booking.status === statusFilter;
+
+    return matchesSearch && matchesStatus;
+  });
+
+  // Sort bookings
+  const sortedBookings = [...filteredBookings].sort((a, b) => {
+    switch (sortBy) {
+      case 'date_asc':
+        return new Date(a.service_date).getTime() - new Date(b.service_date).getTime();
+      case 'date_desc':
+        return new Date(b.service_date).getTime() - new Date(a.service_date).getTime();
+      case 'price_asc':
+        return a.final_price - b.final_price;
+      case 'price_desc':
+        return b.final_price - a.final_price;
+      default:
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    }
+  });
+
   // Separate bookings into upcoming and past
   const now = new Date();
-  const upcomingBookings = bookings.filter(booking => 
+  const upcomingBookings = sortedBookings.filter(booking => 
     isAfter(new Date(booking.service_date), now) && 
+
     (booking.status === 'pending' || booking.status === 'confirmed' || booking.status === 'accepted' || booking.status === 'in_progress')
+
   );
   
-  const pastBookings = bookings.filter(booking => 
+  const pastBookings = sortedBookings.filter(booking => 
     isBefore(new Date(booking.service_date), now) || 
     booking.status === 'completed' || 
     booking.status === 'cancelled'
@@ -410,6 +445,48 @@ const MyBookings = () => {
         <p className="text-muted-foreground">View and manage your service booking history</p>
       </div>
 
+      {/* Search and Filter Section */}
+      <div className="flex flex-col sm:flex-row gap-4 p-4 bg-card rounded-lg border">
+        <div className="flex-1">
+          <div className="relative">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by booking number, service, or provider..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-[150px]">
+              <Filter className="h-4 w-4 mr-2" />
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Status</SelectItem>
+              <SelectItem value="confirmed">Confirmed</SelectItem>
+              <SelectItem value="accepted">Accepted</SelectItem>
+              <SelectItem value="in_progress">In Progress</SelectItem>
+              <SelectItem value="completed">Completed</SelectItem>
+              <SelectItem value="cancelled">Cancelled</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={sortBy} onValueChange={setSortBy}>
+            <SelectTrigger className="w-[150px]">
+              <SelectValue placeholder="Sort by" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="date_desc">Latest First</SelectItem>
+              <SelectItem value="date_asc">Oldest First</SelectItem>
+              <SelectItem value="price_desc">Price High to Low</SelectItem>
+              <SelectItem value="price_asc">Price Low to High</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
       <Tabs defaultValue="upcoming" className="w-full">
         <TabsList className="grid w-full grid-cols-2 max-w-md">
           <TabsTrigger value="upcoming">
@@ -424,7 +501,7 @@ const MyBookings = () => {
           {upcomingBookings.length === 0 ? (
             <div className="text-center py-12">
               <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-              <p className="text-muted-foreground">No upcoming bookings. Browse services to book your next appointment!</p>
+              <p className="text-muted-foreground">No upcoming bookings found.</p>
             </div>
           ) : (
             <motion.div

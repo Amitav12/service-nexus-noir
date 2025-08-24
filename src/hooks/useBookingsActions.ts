@@ -1,4 +1,3 @@
-
 import { useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -155,12 +154,14 @@ export const useBookingsActions = () => {
           provider_earnings: Math.round(Number(item.price) * 0.9 * 100) / 100,
           special_instructions: item.special_instructions || null,
           service_address: serviceAddress,
-          service_city: address.city || null,
-          service_state: address.state || null,
-          service_zip: postalCode || null,
+
+          service_city: address.city,
+          service_state: address.state,
+          service_zip: address.postal_code,
           booking_number: generateBookingNumber(),
-          status: 'confirmed', // Set status to confirmed after payment
-          confirmed_at: new Date().toISOString() // Set confirmation timestamp
+          status: 'confirmed', // Set as confirmed after payment
+          confirmed_at: new Date().toISOString()
+
         };
   
         console.log('📝 Creating booking with data:', {
@@ -179,6 +180,7 @@ export const useBookingsActions = () => {
           .single();
   
         if (error) {
+
           console.error('❌ Database error creating booking:', {
             error,
             code: error.code,
@@ -187,6 +189,7 @@ export const useBookingsActions = () => {
             hint: error.hint
           });
           throw new Error(`Database error: ${error.message} (Code: ${error.code})`);
+
         }
   
         console.log('✅ Booking created successfully:', createdBooking.id);
@@ -223,11 +226,13 @@ export const useBookingsActions = () => {
   
     } catch (error) {
       const msg = formatError(error);
+
       console.error('❌ Error in createBookingsFromCart:', {
         error,
         message: msg,
         stack: error instanceof Error ? error.stack : undefined
       });
+
       throw new Error(msg);
     } finally {
       setLoading(false);

@@ -74,3 +74,13 @@ verify_jwt = true
 
 [functions.stripe-webhook]
 verify_jwt = false
+
+# New slot-based booking functions
+[functions.reserve-slot]
+verify_jwt = true
+
+[functions.create-payment-intent-slots]
+verify_jwt = true
+
+[functions.stripe-webhook-slots]
+verify_jwt = false
