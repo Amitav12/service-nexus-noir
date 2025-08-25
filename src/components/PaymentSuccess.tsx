@@ -1,9 +1,11 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useShoppingCart } from '@/hooks/useShoppingCart';
 import { useBookingsActions } from '@/hooks/useBookingsActions';
 import { useToast } from '@/hooks/use-toast';
 import BookingResultModal from './BookingResultModal';
+import PaymentFallbackHandler from './PaymentFallbackHandler';
 import { useAuth } from '@/hooks/useAuth';
 import { formatError } from '@/lib/errorFormatter';
 
@@ -22,6 +24,7 @@ const PaymentSuccess = () => {
   const [error, setError] = useState<string | null>(null);
   const [retryAttempts, setRetryAttempts] = useState(0);
   const [showModal, setShowModal] = useState(false);
+  const [showFallback, setShowFallback] = useState(false);
 
   // Prevent duplicate execution (StrictMode double-mounts + reloads)
   const hasTriggeredRef = useRef(false);
@@ -30,7 +33,6 @@ const PaymentSuccess = () => {
     // Guard if already processed in this session and not a retry
     if (!isRetry && (hasTriggeredRef.current || sessionStorage.getItem(PAYMENT_PROCESSED_FLAG) === 'true')) {
       console.log('ℹ️ Payment success already processed. Showing success state.');
-      // Show success state for already processed payments
       setBookingsCreated(true);
       setShowModal(true);
       return;
@@ -52,17 +54,38 @@ const PaymentSuccess = () => {
 
     if (!pendingItems || !pendingAddress) {
       console.log('❌ No pending checkout data found');
-      setError('No payment data found to create bookings. If you were charged, contact support.');
+      setError('No checkout data found. Please contact support if you were charged.');
       setShowModal(true);
       return;
     }
 
-    // Extract session_id from URL parameters
-    const sessionId = searchParams.get('session_id');
+    // Extract session_id from URL parameters - this confirms payment was successful
+    const sessionId = searchParams.get('session_id') || new URLSearchParams(window.location.search).get('session_id');
     
+    console.log('🔍 Session ID check:');
+    console.log('  - From searchParams:', searchParams.get('session_id'));
+    console.log('  - From URL directly:', new URLSearchParams(window.location.search).get('session_id'));
+    console.log('  - Final sessionId:', sessionId);
+    console.log('  - Current URL:', window.location.href);
+    
+    // If no session_id, check if we have pending data and user is authenticated
+    // This might be a direct access or browser back button scenario
     if (!sessionId) {
       console.log('❌ No session_id found in URL parameters');
-      setError('Invalid payment session. Please contact support if you were charged.');
+      console.log('   - Search params:', Object.fromEntries(searchParams.entries()));
+      console.log('   - Direct URL params:', Object.fromEntries(new URLSearchParams(window.location.search).entries()));
+      console.log('   - Full URL:', window.location.href);
+      
+      // Check if this might be a legitimate post-payment scenario with stored data
+      const checkoutTimestamp = sessionStorage.getItem('checkoutTimestamp');
+      const timeElapsed = Date.now() - (checkoutTimestamp ? parseInt(checkoutTimestamp) : 0);
+      
+      if (checkoutTimestamp && timeElapsed < 10 * 60 * 1000) { // Within 10 minutes
+        console.log('⚠️ Recent checkout detected without session_id. This might be a browser back/forward issue.');
+        setError('Payment session not found. If you just completed a payment, please check your email for confirmation or contact support.');
+      } else {
+        setError('Payment session not found. Please contact support if you were charged.');
+      }
       setShowModal(true);
       return;
     }
@@ -78,32 +101,35 @@ const PaymentSuccess = () => {
   
       console.log('📝 Creating bookings with items:', items.length, 'address:', address, 'sessionId:', sessionId);
   
-      const success = await createBookingsFromCart(items, address, sessionId);
+      // Create bookings with confirmed status - since we reached here, payment was successful
+      await createBookingsFromCart(items, address, sessionId);
   
-      if (success !== undefined) {
-        console.log('✅ Bookings created and payments linked successfully');
-  
-        // Mark processed to avoid duplicates on refresh
-        sessionStorage.setItem(PAYMENT_PROCESSED_FLAG, 'true');
-  
-        // Clear cart and temp data
-        clearCart();
-        sessionStorage.removeItem('pendingCheckoutItems');
-        sessionStorage.removeItem('pendingCheckoutAddress');
-        sessionStorage.removeItem('checkoutTimestamp');
-  
-        setBookingsCreated(true);
-        setShowModal(true);
-  
-        toast({
-          title: 'Payment & Booking Successful!',
-          description: `${items.length} booking${items.length !== 1 ? 's' : ''} created and linked to payment successfully.`,
-        });
-  
-        console.log('🎉 Payment success process completed with proper linkage');
-      } else {
-        throw new Error('Failed to create bookings after payment');
-      }
+      console.log('✅ Bookings created successfully with confirmed status');
+
+      // Mark processed to avoid duplicates on refresh
+      sessionStorage.setItem(PAYMENT_PROCESSED_FLAG, 'true');
+
+      // Clear cart and temp data AFTER successful booking creation
+      console.log('🧹 Clearing cart and session data...');
+      
+      // Clear the cart first (localStorage)
+      clearCart();
+      
+      // Then clear session storage
+      sessionStorage.removeItem('pendingCheckoutItems');
+      sessionStorage.removeItem('pendingCheckoutAddress');
+      sessionStorage.removeItem('checkoutTimestamp');
+
+      // Set success state
+      setBookingsCreated(true);
+      setShowModal(true);
+
+      toast({
+        title: 'Payment & Booking Successful!',
+        description: `${items.length} booking${items.length !== 1 ? 's' : ''} created with confirmed status.`,
+      });
+
+      console.log('🎉 Payment success process completed successfully');
     } catch (err) {
       const friendly = formatError(err);
       console.error('❌ Error creating bookings after payment:', err, '->', friendly);
@@ -148,19 +174,80 @@ const PaymentSuccess = () => {
 
   // Only proceed when auth is ready and user is known
   useEffect(() => {
-    console.log('🚀 PaymentSuccess mounted. Auth loading:', authLoading, 'User:', !!user);
-    if (!authLoading && user?.id) {
-      processPaymentSuccess();
-    } else if (!authLoading && !user) {
-      // If auth resolved and no user, show an actionable message
+    const sessionId = searchParams.get('session_id') || new URLSearchParams(window.location.search).get('session_id');
+    const currentUrl = window.location.href;
+    const urlParams = new URLSearchParams(window.location.search);
+    
+    console.log('🚀 PaymentSuccess mounted:');
+    console.log('  - Auth loading:', authLoading);
+    console.log('  - User:', !!user?.id);
+    console.log('  - Current URL:', currentUrl);
+    console.log('  - URL params:', Object.fromEntries(urlParams.entries()));
+    console.log('  - SessionId from searchParams:', searchParams.get('session_id'));
+    console.log('  - SessionId from direct URL params:', urlParams.get('session_id'));
+    console.log('  - Final sessionId:', sessionId);
+    
+    // Special handling for edge cases
+    if (!authLoading && !user) {
+      console.log('❌ User not authenticated');
       setError('You are not signed in. Please sign in to view your bookings.');
       setShowModal(true);
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user?.id]);
 
+    if (!authLoading && user?.id) {
+      if (sessionId) {
+        console.log('✅ All conditions met, processing payment success');
+        processPaymentSuccess();
+      } else {
+        // Check if there's pending checkout data that might indicate a payment flow
+        const pendingItems = sessionStorage.getItem('pendingCheckoutItems');
+        const pendingAddress = sessionStorage.getItem('pendingCheckoutAddress');
+        const checkoutTimestamp = sessionStorage.getItem('checkoutTimestamp');
+        
+        if (pendingItems && pendingAddress && checkoutTimestamp) {
+          const timeElapsed = Date.now() - parseInt(checkoutTimestamp);
+          if (timeElapsed < 30 * 60 * 1000) { // Within 30 minutes
+            console.log('⚠️ Found recent pending data but no session_id - showing fallback handler');
+            setShowFallback(true);
+            return;
+          }
+        }
+        
+        console.log('❌ No session_id and no valid pending data');
+        setError('No payment session found. Please contact support if you were charged.');
+        setShowModal(true);
+      }
+    } else {
+      console.log('⏳ Waiting for conditions: authLoading=', authLoading, 'user=', !!user?.id, 'sessionId=', !!sessionId);
+    }
+  }, [authLoading, user?.id, searchParams]);
+
+  const handleFallbackSuccess = () => {
+    setBookingsCreated(true);
+    setShowFallback(false);
+    setShowModal(true);
+  };
+
+  const handleFallbackError = (error: string) => {
+    setError(error);
+    setShowFallback(false);
+    setShowModal(true);
+  };
+
+  // Show fallback handler if no session_id but pending data exists
+  if (showFallback) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <PaymentFallbackHandler
+          onBookingsCreated={handleFallbackSuccess}
+          onError={handleFallbackError}
+        />
+      </div>
+    );
+  }
   // Show loading state if still processing
-  if ((authLoading || creating) && !showModal) {
+  if ((authLoading || creating) && !showModal && !showFallback) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">

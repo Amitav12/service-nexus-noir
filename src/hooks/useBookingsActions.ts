@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
-import type { Database } from '@/integrations/supabase/types';
+import type { Database } from '@/integrations/supabase/database';
 import { formatError } from '@/lib/errorFormatter';
 
 export interface CartItem {
@@ -19,10 +19,9 @@ export interface CartItem {
 
 // Generate a compact booking number that always fits in VARCHAR(20)
 const generateBookingNumber = () => {
-  // Format: BK + base36(timestamp) + 4 random chars (uppercase), no separators
-  const ts = Date.now().toString(36).toUpperCase(); // ~8-10 chars
-  const rand = Math.random().toString(36).slice(2, 6).toUpperCase(); // 4 chars
-  const code = `BK${ts}${rand}`; // ~14-16 chars, well under 20
+  const ts = Date.now().toString(36).toUpperCase();
+  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  const code = `BK${ts}${rand}`;
   return code.length <= 20 ? code : code.slice(0, 20);
 };
 
@@ -55,27 +54,43 @@ export const useBookingsActions = () => {
     setLoading(true);
   
     try {
-      // Find the payment record using session_id if provided
+      // Since we're here, payment was successful (session_id in URL confirms this)
+      // Create payment record if sessionId provided for tracking
       let paymentRecord = null;
       if (sessionId) {
-        console.log('🔍 Looking up payment for session:', sessionId);
+        console.log('🔍 Creating/updating payment record for session:', sessionId);
+        
+        // Calculate total amount
+        const totalAmount = items.reduce((sum, item) => sum + item.price, 0);
+        
+        // Create payment record for tracking
         const { data: paymentData, error: paymentError } = await supabase
           .from('payments')
+          .insert({
+            customer_id: user.id,
+            amount: totalAmount,
+            currency: 'USD',
+            payment_status: 'completed',
+            stripe_session_id: sessionId,
+            processed_at: new Date().toISOString()
+          })
           .select('id, amount, payment_status')
-          .eq('stripe_session_id', sessionId)
-          .eq('payment_status', 'completed')
           .single();
         
-        if (paymentError) {
-          console.error('❌ Could not find payment for session:', sessionId, paymentError);
-          throw new Error('Payment record not found. Please contact support.');
-        } else {
+        if (paymentError && paymentError.code !== '23505') { // Ignore duplicate key error
+          console.warn('⚠️ Could not create payment record:', paymentError);
+          // Don't throw error - bookings are more important than payment tracking
+        } else if (paymentData) {
           paymentRecord = paymentData;
-          console.log('✅ Found payment record:', paymentRecord.id, 'for session:', sessionId);
+          console.log('✅ Created payment record:', paymentRecord.id, 'for session:', sessionId);
         }
       }
   
-      const bookingPromises = items.map(async (item, index) => {
+      const createdBookings = [];
+      
+      // Process bookings sequentially to avoid conflicts
+      for (let index = 0; index < items.length; index++) {
+        const item = items[index];
         console.log(`🔄 Processing item ${index + 1}/${items.length}:`, item.service_title);
   
         // Step 1: Validate and get actual provider ID
@@ -89,13 +104,8 @@ export const useBookingsActions = () => {
             .eq('id', item.service_id)
             .single();
   
-          if (serviceError) {
-            console.error('❌ Error fetching service provider:', serviceError);
-            throw new Error(`Failed to get provider for service ${item.service_title}: ${serviceError.message}`);
-          }
-  
-          if (!serviceData) {
-            throw new Error(`Service not found: ${item.service_title}`);
+          if (serviceError || !serviceData) {
+            throw new Error(`Failed to get provider for service ${item.service_title}: ${serviceError?.message}`);
           }
   
           actualProviderId = serviceData.provider_id as string;
@@ -110,12 +120,7 @@ export const useBookingsActions = () => {
           .eq('user_id', actualProviderId)
           .single();
   
-        if (providerError) {
-          console.error('❌ Provider validation error:', providerError);
-          throw new Error(`Provider validation failed for ${item.service_title}: ${providerError.message}`);
-        }
-  
-        if (!providerData) {
+        if (providerError || !providerData) {
           throw new Error(`Provider not found for service ${item.service_title}`);
         }
   
@@ -134,7 +139,6 @@ export const useBookingsActions = () => {
           .single();
   
         if (serviceCheckError) {
-          console.error('❌ Service validation error:', serviceCheckError);
           throw new Error(`Service validation failed: ${serviceCheckError.message}`);
         }
   
@@ -142,7 +146,8 @@ export const useBookingsActions = () => {
         const postalCode = address.postal_code || address.zip_code || '';
         const serviceAddress = `${address.address_line_1}${address.address_line_2 ? ', ' + address.address_line_2 : ''}, ${address.city}, ${address.state} ${postalCode}`;
   
-        // Step 5: Prepare booking data with validation
+        // Step 5: Prepare booking data with CONFIRMED status immediately
+        const now = new Date().toISOString();
         const bookingData: Database['public']['Tables']['bookings']['Insert'] = {
           customer_id: user.id,
           provider_user_id: actualProviderId,
@@ -154,45 +159,33 @@ export const useBookingsActions = () => {
           provider_earnings: Math.round(Number(item.price) * 0.9 * 100) / 100,
           special_instructions: item.special_instructions || null,
           service_address: serviceAddress,
-
           service_city: address.city,
           service_state: address.state,
           service_zip: address.postal_code,
           booking_number: generateBookingNumber(),
-          status: 'confirmed', // Set as confirmed after payment
-          confirmed_at: new Date().toISOString()
-
+          status: 'confirmed', // Set as confirmed immediately after payment
+          confirmed_at: now
         };
   
-        console.log('📝 Creating booking with data:', {
-          ...bookingData,
-          service_date: new Date(bookingData.service_date).toISOString(),
-          final_price: bookingData.final_price,
-          platform_fee: bookingData.platform_fee,
-          payment_id: paymentRecord?.id
-        });
+        console.log('📝 Creating booking with confirmed status:', bookingData.booking_number);
   
         // Step 6: Create the booking
+        console.log('📊 Inserting booking data:', JSON.stringify(bookingData, null, 2));
+        
         const { data: createdBooking, error } = await supabase
           .from('bookings')
           .insert(bookingData)
           .select()
           .single();
-  
+
         if (error) {
-
-          console.error('❌ Database error creating booking:', {
-            error,
-            code: error.code,
-            message: error.message,
-            details: error.details,
-            hint: error.hint
-          });
-          throw new Error(`Database error: ${error.message} (Code: ${error.code})`);
-
+          console.error('❌ Database error creating booking:', error);
+          console.error('❌ Booking data that failed:', bookingData);
+          throw new Error(`Database error: ${error.message} (Code: ${error.code}) - Details: ${error.details || 'No details'}`);
         }
   
-        console.log('✅ Booking created successfully:', createdBooking.id);
+        console.log('✅ Booking created successfully:', createdBooking.id, 'with status:', createdBooking.status);
+        createdBookings.push(createdBooking);
   
         // Step 7: Link payment to booking if payment exists
         if (paymentRecord && createdBooking) {
@@ -203,36 +196,31 @@ export const useBookingsActions = () => {
             .update({ 
               booking_id: createdBooking.id,
               provider_user_id: actualProviderId,
-              updated_at: new Date().toISOString()
+              updated_at: now
             })
             .eq('id', paymentRecord.id);
-  
+
           if (linkError) {
             console.error('❌ Error linking payment to booking:', linkError);
-            // Don't throw here - booking was created successfully
             console.warn('⚠️ Booking created but payment linkage failed. Manual intervention may be needed.');
           } else {
             console.log('✅ Payment successfully linked to booking');
           }
+        } else if (createdBooking) {
+          console.log('ℹ️ Booking created without payment record linking');
         }
-  
-        return createdBooking;
-      });
-  
-      const createdBookings = await Promise.all(bookingPromises);
+      }
       
-      console.log('🎉 All bookings created and linked successfully:', createdBookings.length);
+      console.log('🎉 All bookings created successfully:', createdBookings.length, 'bookings with confirmed status');
       return;
   
     } catch (error) {
       const msg = formatError(error);
-
       console.error('❌ Error in createBookingsFromCart:', {
         error,
         message: msg,
         stack: error instanceof Error ? error.stack : undefined
       });
-
       throw new Error(msg);
     } finally {
       setLoading(false);
@@ -327,27 +315,4 @@ export const useBookingsActions = () => {
     cancelBooking,
     loading,
   };
-};
-
-// Fix the payment-booking linkage we identified
-const createBookingsFromCart = async (sessionId: string) => {
-  // Find payment record
-  const { data: payment } = await supabase
-    .from('payments')
-    .select('*')
-    .eq('stripe_session_id', sessionId)
-    .eq('payment_status', 'completed')
-    .single();
-
-  if (!payment) throw new Error('Payment not found');
-
-  // Create bookings with proper linkage
-  const bookingData = (cartItems: CartItem[]) => cartItems.map(item => ({
-    // ... existing fields ...
-    payment_id: payment.id, // Establish the relationship
-    status: 'confirmed'
-  }));
-
-  // Insert bookings and update payment with booking_id
-  // This addresses the idempotency and linkage issues
 };

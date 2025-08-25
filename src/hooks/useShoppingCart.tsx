@@ -184,13 +184,31 @@ export const useShoppingCart = () => {
   }, []);
 
   const clearCart = useCallback(() => {
-    console.log('🧹 Clearing cart');
+    console.log('🧹 Clearing cart - current items:', items.length);
+    
+    // Clear localStorage immediately and forcefully
+    try {
+      localStorage.removeItem(CART_STORAGE_KEY);
+      // Force a second clear to ensure it's gone
+      localStorage.setItem(CART_STORAGE_KEY, '[]');
+      localStorage.removeItem(CART_STORAGE_KEY);
+      console.log('✅ Cart cleared from localStorage');
+    } catch (error) {
+      console.error('❌ Error clearing cart from localStorage:', error);
+    }
+    
+    // Clear state immediately
     setItems([]);
-    toast({
-      title: "Cart cleared",
-      description: "All items have been removed from your cart",
-    });
-  }, [toast]);
+    console.log('✅ Cart state cleared - new count:', 0);
+    
+    // Don't show toast during payment success to avoid confusion
+    if (!window.location.pathname.includes('payment-success')) {
+      toast({
+        title: "Cart cleared",
+        description: "All items have been removed from your cart",
+      });
+    }
+  }, [items.length, toast]);
 
   const getTotalPrice = useCallback(() => {
     const total = items.reduce((sum, item) => sum + item.price, 0);
