@@ -81,13 +81,13 @@ const PaymentFallbackHandler: React.FC<PaymentFallbackHandlerProps> = ({
           <CardTitle>Payment Processing Issue</CardTitle>
         </div>
         <CardDescription>
-          We detected that you may have completed a payment, but we're missing some confirmation details.
+          We detected that you may have completed a payment, but there was a technical issue with automatic booking creation.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">
-            If you just completed a payment and were redirected here, click below to create your bookings:
+            This screen appears only when there's a technical issue preventing automatic booking creation after successful payment. Click below to create your bookings manually:
           </p>
         </div>
         

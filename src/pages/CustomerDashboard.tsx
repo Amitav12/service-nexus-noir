@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { User, Calendar, Heart, ShoppingCart, Star, Clock, MapPin, Bell, LogOut, DollarSign } from 'lucide-react';
+import { User, Calendar, Heart, ShoppingCart, Star, Clock, MapPin, Bell, LogOut, DollarSign, Menu, X } from 'lucide-react';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -19,10 +20,12 @@ const CustomerDashboard = () => {
   const [selectedService, setSelectedService] = useState(null);
   const [selectedProvider, setSelectedProvider] = useState(null);
   const [showCart, setShowCart] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   const { user, signOut } = useAuth();
   const { services, loading, error, silentRefresh } = useServices();
   const { itemCount, initialized } = useShoppingCart();
+  const isMobile = useIsMobile();
 
   console.log('🏠 CustomerDashboard render - cart itemCount:', itemCount, 'initialized:', initialized);
 
@@ -82,8 +85,43 @@ const CustomerDashboard = () => {
 
   return (
     <div className="min-h-screen bg-background flex">
-      {/* Fixed Sidebar */}
-      <div className="w-64 bg-card border-r border-border flex flex-col fixed left-0 top-0 h-full z-10">
+      {/* Mobile Menu Button */}
+      {isMobile && (
+        <button
+          onClick={() => setMobileMenuOpen(true)}
+          className="fixed top-4 left-4 z-50 p-2 bg-card border border-border rounded-lg shadow-lg md:hidden"
+        >
+          <Menu className="w-6 h-6 text-foreground" />
+        </button>
+      )}
+
+      {/* Mobile Overlay */}
+      {isMobile && mobileMenuOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-40 md:hidden"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <div className={`
+        ${isMobile ? 'fixed' : 'w-64 fixed'} 
+        ${isMobile && !mobileMenuOpen ? '-translate-x-full' : 'translate-x-0'}
+        ${isMobile ? 'w-80' : 'w-64'}
+        bg-card border-r border-border flex flex-col left-0 top-0 h-full z-50 transition-transform duration-300 ease-in-out
+      `}>
+        {/* Mobile Close Button */}
+        {isMobile && (
+          <div className="flex justify-end p-4 border-b border-border">
+            <button
+              onClick={() => setMobileMenuOpen(false)}
+              className="p-2 hover:bg-muted rounded-lg"
+            >
+              <X className="w-6 h-6 text-foreground" />
+            </button>
+          </div>
+        )}
+
         {/* User Profile Section */}
         <div className="p-6 border-b border-border">
           <div className="flex items-center gap-3">
@@ -100,7 +138,10 @@ const CustomerDashboard = () => {
         {/* Navigation */}
         <nav className="flex-1 p-4 space-y-2">
           <button
-            onClick={() => setActiveTab('services')}
+            onClick={() => {
+              setActiveTab('services');
+              if (isMobile) setMobileMenuOpen(false);
+            }}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors ${
               activeTab === 'services' 
                 ? 'bg-teal/10 text-teal border border-teal/20' 
@@ -112,7 +153,10 @@ const CustomerDashboard = () => {
           </button>
           
           <button
-            onClick={() => setActiveTab('bookings')}
+            onClick={() => {
+              setActiveTab('bookings');
+              if (isMobile) setMobileMenuOpen(false);
+            }}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors ${
               activeTab === 'bookings' 
                 ? 'bg-teal/10 text-teal border border-teal/20' 
@@ -124,7 +168,10 @@ const CustomerDashboard = () => {
           </button>
 
           <button
-            onClick={() => setActiveTab('amount')}
+            onClick={() => {
+              setActiveTab('amount');
+              if (isMobile) setMobileMenuOpen(false);
+            }}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors ${
               activeTab === 'amount' 
                 ? 'bg-teal/10 text-teal border border-teal/20' 
@@ -136,7 +183,10 @@ const CustomerDashboard = () => {
           </button>
           
           <button
-            onClick={() => setActiveTab('favorites')}
+            onClick={() => {
+              setActiveTab('favorites');
+              if (isMobile) setMobileMenuOpen(false);
+            }}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors ${
               activeTab === 'favorites' 
                 ? 'bg-teal/10 text-teal border border-teal/20' 
@@ -148,7 +198,10 @@ const CustomerDashboard = () => {
           </button>
 
           <button
-            onClick={() => setActiveTab('profile')}
+            onClick={() => {
+              setActiveTab('profile');
+              if (isMobile) setMobileMenuOpen(false);
+            }}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors ${
               activeTab === 'profile' 
                 ? 'bg-teal/10 text-teal border border-teal/20' 
@@ -163,7 +216,10 @@ const CustomerDashboard = () => {
         {/* Cart and Sign Out */}
         <div className="p-4 border-t border-border space-y-2">
           <button
-            onClick={() => setShowCart(true)}
+            onClick={() => {
+              setShowCart(true);
+              if (isMobile) setMobileMenuOpen(false);
+            }}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors text-muted-foreground hover:bg-muted hover:text-foreground relative"
           >
             <ShoppingCart className="w-5 h-5" />
@@ -189,9 +245,9 @@ const CustomerDashboard = () => {
       </div>
 
       {/* Main Content Area - with left margin to account for fixed sidebar */}
-      <div className="flex-1 ml-64">
+      <div className={`flex-1 ${isMobile ? 'ml-0' : 'ml-64'}`}>
         <div className="h-screen overflow-y-auto">
-          <div className="p-6">
+          <div className={`p-6 ${isMobile ? 'mt-16' : ''}`}>
             {/* Services Tab */}
             {activeTab === 'services' && !selectedService && (
               <div className="space-y-6">
